@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from ui.optimized_compare import Ui_Form
 from PyQt6.QtCore import Qt  # 注意：PyQt6 中是小写的 qt（区分大小写）
 
+
 class CompareApp(QWidget, Ui_Form):
     def __init__(self):
         super().__init__()
