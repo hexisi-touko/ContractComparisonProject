@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys
 import os
+import shutil
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QFileDialog, QMessageBox,
                              QVBoxLayout, QHBoxLayout, QLabel, QPushButton)
@@ -18,10 +19,16 @@ class CompareApp(QWidget, Ui_Form):
         self.setupUi(self)
         self.setWindowTitle("文件对比工具")
 
+        # 初始化历史文件存储目录
+        self.history_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history_files")
+        if not os.path.exists(self.history_dir):
+            os.makedirs(self.history_dir)
+
         # 绑定按钮事件
         self.importOriginalFileButton.clicked.connect(self.load_original_file)
         self.importCompareFileButton.clicked.connect(self.load_compare_file)
         self.compareButton.clicked.connect(self.compare_files)
+        self.historyButton.clicked.connect(self.show_history_page)
 
         # 存储路径与HTML内容
         self.original_file_path = None
@@ -30,6 +37,9 @@ class CompareApp(QWidget, Ui_Form):
         self.compare_html = None
         self.original_nodes = []  # 存储原文件的<p>和<li>节点（含完整文本和标签）
         self.compare_nodes = []   # 存储对比文件的<p>和<li>节点（含完整文本和标签）
+
+        # 历史页面实例（作为子窗口）
+        self.history_page = None
 
         # 模拟 Word 样式
         self.word_css = """
@@ -113,16 +123,41 @@ class CompareApp(QWidget, Ui_Form):
         </style>
         """
 
-    def load_file(self, is_original):
-        """加载文件并提取所有段落/列表项节点"""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择" + ("原文件" if is_original else "对比文件"), "", "Word 文件 (*.docx)"
-        )
+    def load_file(self, is_original, file_path=None):  # 新增file_path参数
+        """加载文件并提取所有段落/列表项节点（统一处理原文件和对比文件）"""
+        # 确定文件选择对话框标题
+        title = "选择原文件" if is_original else "选择对比文件"
+
+        # 如果没有传入file_path，则打开文件选择对话框
         if not file_path:
-            return
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, title, "", "Word 文件 (*.docx)"
+            )
+        if not file_path:
+            return  # 用户取消选择
 
         try:
-            with open(file_path, "rb") as docx_file:
+            # 处理原文件的历史备份（仅原文件需要）
+            if is_original:
+                # 仅当不是从历史记录加载时才备份
+                if not file_path.startswith(self.history_dir):
+                    # 生成带时间戳的文件名
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = os.path.basename(file_path)
+                    name, ext = os.path.splitext(filename)
+                    history_filename = f"{name}_{timestamp}{ext}"
+                    history_path = os.path.join(self.history_dir, history_filename)
+                    # 复制文件到历史文件夹
+                    shutil.copy2(file_path, history_path)
+                    target_path = history_path
+                else:
+                    target_path = file_path
+            else:
+                # 对比文件直接使用选择的路径
+                target_path = file_path
+
+            # 读取文件并转换为HTML
+            with open(target_path, "rb") as docx_file:
                 style_map = """
                 p[style-name='标题 1'] => p.contract-main-title
                 p[style-name='正文'] => p.contract-preface
@@ -136,38 +171,82 @@ class CompareApp(QWidget, Ui_Form):
                 result = mammoth.convert_to_html(
                     docx_file,
                     style_map=style_map,
-                   ## convert_image=mammoth.images.img_element
+                    # convert_image=mammoth.images.img_element
                 )
                 html_content = result.value
-                soup = BeautifulSoup(html_content, 'html.parser')
 
+            # 构建完整HTML（包含CSS样式）
             full_html = f"""
-            <!DOCTYPE html><html><head>
-            <meta charset="UTF-8">{self.word_css}</head><body>
-            {html_content}</body></html>
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                {self.word_css}
+            </head>
+            <body>
+                {html_content}
+            </body>
+            </html>
             """
 
-            # 提取所有<p>和<li>节点（含完整标签和文本）
+            # 解析HTML提取节点
+            soup = BeautifulSoup(html_content, 'html.parser')
             nodes = soup.find_all(['p', 'li'])
+
+            # 根据文件类型保存数据并显示
             if is_original:
-                self.original_file_path = file_path
+                self.original_file_path = target_path
                 self.original_html = html_content
                 self.original_nodes = nodes
                 self.webEngineOriginView.setHtml(full_html)
             else:
-                self.compare_file_path = file_path
+                self.compare_file_path = target_path
                 self.compare_html = html_content
                 self.compare_nodes = nodes
                 self.webEngineCompareView.setHtml(full_html)
 
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"无法显示{('原' if is_original else '对比')}文件内容：\n{e}")
+            file_type = "原" if is_original else "对比"
+            QMessageBox.critical(self, "错误", f"无法显示{file_type}文件内容：\n{e}")
 
-    def load_original_file(self):
-        self.load_file(is_original=True)
+    def load_original_file(self, file_path=None):  # 新增file_path参数
+        """导入原文件（调用统一处理方法，支持从历史记录加载）"""
+        # 调用load_file时，传入file_path（若有）
+        self.load_file(is_original=True, file_path=file_path)
 
     def load_compare_file(self):
+        """导入对比文件（调用统一处理方法）"""
         self.load_file(is_original=False)
+
+    def handle_image(self,image):
+        """处理图片转换，出错时返回空标签避免崩溃"""
+        try:
+            # 尝试转换图片为HTML标签
+            return mammoth.images.img_element(image)
+        except Exception:
+            # 出错时返回空标签（或提示文字）
+            return ("<p>[无法显示的图片]</p>",)  # 必须返回可迭代对象（如元组）
+
+    # 在CompareApp类中添加显示历史页面的方法
+    def show_history_page(self):
+        """显示历史页面，大小与主界面一致并覆盖主界面"""
+        # 创建历史页面（主窗口为父窗口）
+        self.history_page = HistoryPage(
+            parent=self,  # 关键：设置主窗口为父窗口
+            history_dir=self.history_dir,
+            callback=self.load_original_file
+        )
+        # 设置历史页面大小与主界面完全一致
+        self.history_page.setGeometry(self.rect())  # 关键：同步大小和位置
+        # 显示历史页面（会覆盖主界面）
+        self.history_page.show()
+
+    # 重写窗口大小改变事件：同步历史页面大小
+    def resizeEvent(self, event):
+        if self.history_page and self.history_page.isVisible():
+            self.history_page.setGeometry(self.rect())  # 主窗口 resize 时，历史页面同步
+        super().resizeEvent(event)
+
 
     def highlight_differences(self, original_text, compare_text):
         """精准标红差异：仅当文本不同时才标记，支持新增、删除、替换"""
