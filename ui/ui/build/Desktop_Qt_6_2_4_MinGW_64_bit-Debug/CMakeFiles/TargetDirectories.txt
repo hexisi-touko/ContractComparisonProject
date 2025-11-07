@@ -1,0 +1,9 @@
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/ui.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/edit_cache.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/rebuild_cache.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/list_install_components.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/install.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/install/local.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/install/strip.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/ui_autogen_timestamp_deps.dir
+D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug/CMakeFiles/ui_autogen.dir

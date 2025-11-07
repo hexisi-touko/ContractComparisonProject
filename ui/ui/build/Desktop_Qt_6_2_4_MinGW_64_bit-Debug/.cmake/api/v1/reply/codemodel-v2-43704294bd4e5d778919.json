@@ -1,0 +1,79 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-Debug-fb46a3479755d8b232cf.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.16"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "ui",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "ui::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ui-Debug-05852103f946dc96d860.json",
+					"name" : "ui",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "ui_autogen::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ui_autogen-Debug-3c160e20b25675da8908.json",
+					"name" : "ui_autogen",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "ui_autogen_timestamp_deps::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ui_autogen_timestamp_deps-Debug-62ddf7d7829f7a7d9e35.json",
+					"name" : "ui_autogen_timestamp_deps",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "D:/python_code/hetong_duibi/project/ui/ui/build/Desktop_Qt_6_2_4_MinGW_64_bit-Debug",
+		"source" : "D:/python_code/hetong_duibi/project/ui/ui"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 7
+	}
+}
