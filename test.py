@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import sys
 import os
+import re
 import shutil
 from datetime import datetime
 from PyQt6.QtWidgets import (QApplication, QWidget, QFileDialog, QMessageBox,
@@ -130,15 +131,259 @@ class CompareApp(QWidget, Ui_Form):
     def extract_text_blocks(self, html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
         text_blocks = []
-        for p in soup.find_all('p'):
-            text = p.get_text(strip=True)
-            if text:
-                text_blocks.append({'text': text, 'tag': 'p'})
-        for li in soup.find_all('li'):
-            text = li.get_text(strip=True)
-            if text:
-                text_blocks.append({'text': text, 'tag': 'li'})
+        # 扩展需要提取的标签类型（覆盖合同常见元素）
+        target_tags = ['p', 'li', 'h1', 'h2', 'h3', 'td', 'th']  # 新增标题、表格单元格标签
+
+        for tag in target_tags:
+            for element in soup.find_all(tag):
+                # 提取文本并过滤纯空白/无效内容
+                text = element.get_text(strip=True)
+                if not text:
+                    continue  # 跳过空文本块
+
+                # 提取合同层级信息（基于CSS类名，如 clause-level1 对应一级条款）
+                level = 0
+                classes = element.get('class', [])
+                for cls in classes:
+                    if cls.startswith('clause-level'):
+                        # 从类名中提取层级数字（如 'clause-level2' → 2）
+                        level = int(cls.split('-')[-1])
+                        break
+
+                # 提取合同特有标识（如条款号、角色名）
+                identifier = None
+                # 匹配条款号（如"第1条"、"1.1"、"一、"等）
+                clause_pattern = re.compile(r'^(第?\d+[条款项]|[\d.]+|[\u4e00-\u9fa5]+、)')
+                if clause_pattern.match(text):
+                    identifier = clause_pattern.match(text).group()
+
+                # 存储块信息（包含标签类型、层级、标识）
+                text_blocks.append({
+                    'text': text,
+                    'tag': tag,
+                    'level': level,  # 用于结构化匹配
+                    'identifier': identifier,  # 用于锚点定位（如"第3条"）
+                    'original_element': element  # 保留原始元素，便于后续还原格式
+                })
+
         return text_blocks
+
+    def compare_files(self):
+        if not self.original_file_path or not self.compare_file_path:
+            QMessageBox.warning(self, "警告", "请先导入原文件和对比文件！")
+            return
+        if not self.original_text_blocks or not self.compare_text_blocks:
+            QMessageBox.warning(self, "警告", "文件内容解析失败，请重新导入！")
+            return
+
+        try:
+            # 1. 基于条款标识和层级的智能匹配（核心优化）
+            matched_pairs = self.match_blocks_by_structure()
+            if not matched_pairs:
+                QMessageBox.warning(self, "提示", "未找到可匹配的条款结构，将使用默认顺序对比")
+                # 退回到原始顺序对比逻辑
+                matched_pairs = [(i, i) for i in
+                                 range(min(len(self.original_text_blocks), len(self.compare_text_blocks)))]
+                extra_compare_indices = list(range(len(matched_pairs), len(self.compare_text_blocks)))
+            else:
+                # 提取未匹配的新增条款
+                extra_compare_indices = [j for j in range(len(self.compare_text_blocks))
+                                         if j not in [pair[1] for pair in matched_pairs]]
+
+            # 2. 初始化对比文档
+            soup = BeautifulSoup(self.compare_html, 'html.parser')
+            compare_nodes = soup.find_all(['p', 'li', 'h1', 'h2', 'h3', 'td', 'th'])  # 扩展支持的标签
+            diff_count = 0
+
+            # 3. 对比已匹配的条款块
+            for orig_idx, comp_idx in matched_pairs:
+                orig_block = self.original_text_blocks[orig_idx]
+                comp_block = self.compare_text_blocks[comp_idx]
+                node = compare_nodes[comp_idx]
+
+                # 跳过空文本块
+                if not orig_block['text'] or not comp_block['text']:
+                    continue
+
+                # 4. 针对合同关键信息的增强对比
+                highlighted_html = self.highlight_differences(orig_block['text'], comp_block['text'])
+
+                # 5. 标记条款层级变化（如一级条款变成二级条款）
+                if orig_block.get('level') != comp_block.get('level'):
+                    highlighted_html = f'<span class="level-change">[层级变化] {highlighted_html}</span>'
+                    diff_count += 1  # 层级变化单独计数
+
+                if highlighted_html != comp_block['text']:
+                    diff_count += 1
+                    node.string = ''
+                    node.append(BeautifulSoup(highlighted_html, 'html.parser'))
+
+            # 6. 标记新增条款（合同中新增的条款单独标注来源）
+            for comp_idx in extra_compare_indices:
+                node = compare_nodes[comp_idx]
+                extra_text = node.get_text(strip=True)
+                if extra_text:
+                    diff_count += 1
+                    # 新增条款标记中加入原文件位置提示（如"新增于原文件第X条后"）
+                    insert_pos = self.get_insert_position(comp_idx)
+                    highlight_html = f'<span class="diff-highlight">[新增条款{insert_pos}] {extra_text}</span>'
+                    node.string = ''
+                    node.append(BeautifulSoup(highlight_html, 'html.parser'))
+
+            # 7. 标记原文件有但对比文件缺失的条款
+            missing_indices = [i for i in range(len(self.original_text_blocks))
+                               if i not in [pair[0] for pair in matched_pairs]]
+            if missing_indices:
+                # 在对比文档末尾添加缺失条款汇总
+                missing_section = soup.new_tag('div')
+                missing_section['class'] = 'missing-clauses'
+                missing_section.append(BeautifulSoup('<p><strong>原文件缺失条款：</strong></p>', 'html.parser'))
+
+                for orig_idx in missing_indices:
+                    orig_text = self.original_text_blocks[orig_idx]['text']
+                    missing_p = soup.new_tag('p')
+                    # 确保 BeautifulSoup 解析结果正确
+                    span_soup = BeautifulSoup(f'<span class="diff-delete">[缺失] {orig_text}</span>', 'html.parser')
+                    missing_p.append(span_soup)
+                    missing_section.append(missing_p)
+                    diff_count += 1
+
+                # 关键修复：检查并确保 body 标签存在
+                if soup.body is None:
+                    body = soup.new_tag('body')
+                    soup.append(body)
+                soup.body.append(missing_section)
+
+            # 8. 生成最终HTML
+            highlighted_full_html = f"""
+            <!DOCTYPE html><html><head>
+            <meta charset="UTF-8">{self.word_css}
+            <style>
+                .level-change {{ color: #ff9900; }}  /* 层级变化标记为橙色 */
+                .missing-clauses {{ margin-top: 20pt; padding: 10pt; border: 1px solid #ff0000; }}
+            </style>
+            </head><body>
+            {str(soup)}</body></html>
+            """
+
+            self.highlighted_html = highlighted_full_html
+            self.webEngineCompareView.setHtml(highlighted_full_html)
+            QMessageBox.information(self, "完成", f"文件对比完成！共发现 {diff_count} 处差异（含条款新增/缺失/层级变化）。")
+
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"文件对比失败：\n{e}")
+
+    # 新增：基于条款结构的匹配方法（需配合优化后的extract_text_blocks使用）
+    def match_blocks_by_structure(self):
+        """通过条款标识（如第1条）和层级匹配对应文本块，解决顺序变动问题"""
+        matched = []
+        comp_matched = set()  # 记录已匹配的对比文件索引
+
+        # 优先通过条款标识匹配（如"第1条"必须匹配）
+        for orig_idx, orig_block in enumerate(self.original_text_blocks):
+            orig_id = orig_block.get('identifier')
+            if not orig_id:
+                continue
+            # 在对比文件中找相同标识的条款
+            for comp_idx, comp_block in enumerate(self.compare_text_blocks):
+                if comp_idx in comp_matched:
+                    continue
+                if comp_block.get('identifier') == orig_id:
+                    matched.append((orig_idx, comp_idx))
+                    comp_matched.add(comp_idx)
+                    break
+
+        # 剩余未匹配项按层级+文本相似度匹配
+        for orig_idx, orig_block in enumerate(self.original_text_blocks):
+            if orig_idx in [p[0] for p in matched]:
+                continue  # 跳过已匹配项
+            orig_level = orig_block.get('level', 0)
+            orig_text = orig_block['text']
+            # 找同层级且文本相似度>0.7的条款
+            for comp_idx, comp_block in enumerate(self.compare_text_blocks):
+                if comp_idx in comp_matched:
+                    continue
+                if comp_block.get('level', 0) != orig_level:
+                    continue
+                # 计算文本相似度
+                similarity = SequenceMatcher(None, orig_text, comp_block['text']).ratio()
+                if similarity > 0.7:
+                    matched.append((orig_idx, comp_idx))
+                    comp_matched.add(comp_idx)
+                    break
+
+        return matched
+
+    # 新增：计算新增条款在原文件中的插入位置提示
+    def get_insert_position(self, comp_idx):
+        """判断新增条款在原文件中的相对位置（如"第3条后"）"""
+        comp_block = self.compare_text_blocks[comp_idx]
+        comp_level = comp_block.get('level', 0)
+        # 找到原文件中同层级的最后一个条款
+        last_orig_idx = -1
+        for i, block in enumerate(self.original_text_blocks):
+            if block.get('level', 0) == comp_level:
+                last_orig_idx = i
+        if last_orig_idx == -1:
+            return ""
+        orig_id = self.original_text_blocks[last_orig_idx].get('identifier', f"第{last_orig_idx + 1}项")
+        return f"（位于原文件{orig_id}后）"
+
+    def highlight_differences(self, original_text, compare_text):
+        """增强版差异标红：优化中文分词、忽略无关空格、支持标点符号精确对比"""
+        if original_text == compare_text:
+            return compare_text
+
+        # 1. 预处理：统一空格和换行符（合同中常因格式产生无关空格差异）
+        def preprocess(text):
+            # 合并连续空格为单个（保留一个空格避免语义变化）
+            text = re.sub(r'\s+', ' ', text)
+            # 去除首尾空格（合同条款首尾空格通常无意义）
+            return text.strip()
+
+        orig_processed = preprocess(original_text)
+        comp_processed = preprocess(compare_text)
+
+        # 预处理后仍相同则直接返回
+        if orig_processed == comp_processed:
+            return compare_text
+
+        # 2. 针对中文优化的序列匹配（使用字符级比对，避免英文分词逻辑干扰）
+        matcher = SequenceMatcher(None, orig_processed, comp_processed)
+        result = []
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            orig_segment = orig_processed[i1:i2]
+            comp_segment = comp_processed[j1:j2]
+
+            if tag == 'equal':
+                # 保留原始文本的空格格式（仅替换差异部分，非差异部分保持原样）
+                # 从原始对比文本中截取对应片段（而非预处理后的）
+                # 计算原始文本中对应位置（处理空格差异导致的索引偏移）
+                # 这里简化处理：直接使用对比文本的原始片段（适合大部分场景）
+                result.append(compare_text[j1:j2] if j1 < j2 else '')
+
+            elif tag == 'insert':
+                # 新增内容标红，添加"新增"提示（合同审核中需明确标识新增项）
+                result.append(f'<span class="diff-highlight">[新增]{comp_segment}</span>')
+
+            elif tag == 'delete':
+                # 删除内容标红+删除线，添加"删除"提示
+                result.append(f'<span class="diff-delete">[删除]{orig_segment}</span>')
+
+            elif tag == 'replace':
+                # 替换内容同时显示删除和新增部分，用"替换为"连接
+                result.append(
+                    f'<span class="diff-delete">[删除]{orig_segment}</span>'
+                    f'<span class="diff-highlight">[替换为]{comp_segment}</span>'
+                )
+
+        # 3. 后处理：修复可能的标签嵌套问题（避免HTML解析错误）
+        highlighted = ''.join(result)
+        # 移除空标签（如连续删除/新增导致的空span）
+        highlighted = re.sub(r'<span class="[^"]+"></span>', '', highlighted)
+        return highlighted
+
 
     def load_original_file(self, file_path=None):
         """导入原文件 (.docx)，并在左侧展示区显示，支持从历史记录加载"""
@@ -298,74 +543,6 @@ class CompareApp(QWidget, Ui_Form):
         if self.history_page and self.history_page.isVisible():
             self.history_page.setGeometry(self.rect())  # 主窗口 resize 时，历史页面同步
         super().resizeEvent(event)
-
-
-    def highlight_differences(self, original_text, compare_text):
-        """精准标红差异：仅当文本不同时才标记，支持新增、删除、替换"""
-        if original_text == compare_text:
-            return compare_text  # 文本完全一致时，不做任何标记
-
-        matcher = SequenceMatcher(None, original_text, compare_text)
-        result = []
-
-        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-            if tag == 'equal':
-                result.append(compare_text[j1:j2])
-            elif tag == 'insert':
-                result.append(f'<span class="diff-highlight">{compare_text[j1:j2]}</span>')
-            elif tag == 'delete':
-                result.append(f'<span class="diff-delete">{original_text[i1:i2]}</span>')
-            elif tag == 'replace':
-                result.append(
-                    f'<span class="diff-delete">{original_text[i1:i2]}</span><span class="diff-highlight">{compare_text[j1:j2]}</span>'
-                )
-        return ''.join(result)
-
-    def compare_files(self):
-        if not self.original_file_path or not self.compare_file_path:
-            QMessageBox.warning(self, "警告", "请先导入原文件和对比文件！")
-            return
-        if not self.original_text_blocks or not self.compare_text_blocks:
-            QMessageBox.warning(self, "警告", "文件内容解析失败，请重新导入！")
-            return
-
-        try:
-            soup = BeautifulSoup(self.compare_html, 'html.parser')
-            compare_nodes = soup.find_all(['p', 'li'])
-            min_len = min(len(self.original_text_blocks), len(compare_nodes))
-            diff_count = 0
-
-            for i in range(min_len):
-                orig_block = self.original_text_blocks[i]['text']
-                node = compare_nodes[i]
-                comp_text = node.get_text(strip=True)
-                highlighted_html = self.highlight_differences(orig_block, comp_text)
-                if highlighted_html != comp_text:
-                    diff_count += 1
-                    node.string = ''
-                    node.append(BeautifulSoup(highlighted_html, 'html.parser'))
-
-            if len(compare_nodes) > min_len:
-                for extra_node in compare_nodes[min_len:]:
-                    extra_text = extra_node.get_text(strip=True)
-                    if extra_text:
-                        diff_count += 1
-                        highlight_html = f'<span class="diff-highlight">{extra_text}</span>'
-                        extra_node.string = ''
-                        extra_node.append(BeautifulSoup(highlight_html, 'html.parser'))
-
-            highlighted_full_html = f"""
-            <!DOCTYPE html><html><head>
-            <meta charset="UTF-8">{self.word_css}</head><body>
-            {str(soup)}</body></html>
-            """
-
-            self.highlighted_html = highlighted_full_html
-            self.webEngineCompareView.setHtml(highlighted_full_html)
-            QMessageBox.information(self, "完成", f"文件对比完成！共发现 {diff_count} 处差异。")
-
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"文件对比失败：\n{e}")
 
     # --------------------------------------------------------
     # 导出为带标红的 .docx 副本（删除部分带删除线）
