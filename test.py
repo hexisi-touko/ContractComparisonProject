@@ -122,6 +122,11 @@ class CompareApp(QWidget, Ui_Form):
                 font-weight: bold;
                 padding: 0 2px;
             }
+            /* 在word_css中增加样式 */
+            .level-change-only { 
+                color: #ff9900; 
+                background-color: #fff8e1;  /* 浅黄背景区分纯层级变化 */
+            }
         </style>
         """
 
@@ -209,9 +214,12 @@ class CompareApp(QWidget, Ui_Form):
                 highlighted_html = self.highlight_differences(orig_block['text'], comp_block['text'])
 
                 # 5. 标记条款层级变化（如一级条款变成二级条款）
+                # 优化层级变化判断：文本相同则仅标记不计数，文本不同则正常计数
                 if orig_block.get('level') != comp_block.get('level'):
                     highlighted_html = f'<span class="level-change">[层级变化] {highlighted_html}</span>'
-                    diff_count += 1  # 层级变化单独计数
+                    # 只有当文本内容不同时，才计入差异计数
+                    if highlighted_html != comp_block['text']:
+                        diff_count += 1
 
                 if highlighted_html != comp_block['text']:
                     diff_count += 1
@@ -288,10 +296,14 @@ class CompareApp(QWidget, Ui_Form):
             for comp_idx, comp_block in enumerate(self.compare_text_blocks):
                 if comp_idx in comp_matched:
                     continue
+                # 优先通过条款标识匹配时，增加层级相似性判断
                 if comp_block.get('identifier') == orig_id:
-                    matched.append((orig_idx, comp_idx))
-                    comp_matched.add(comp_idx)
-                    break
+                    # 若层级差异过大（如相差>1级），降低匹配优先级
+                    level_diff = abs(comp_block.get('level', 0) - orig_block.get('level', 0))
+                    if level_diff <= 1:  # 允许相邻层级的微小差异
+                        matched.append((orig_idx, comp_idx))
+                        comp_matched.add(comp_idx)
+                        break
 
         # 剩余未匹配项按层级+文本相似度匹配
         for orig_idx, orig_block in enumerate(self.original_text_blocks):
